@@ -30,9 +30,7 @@ use rand::thread_rng;
 use rand_distr::Normal;
 use rand_distr::Distribution;
 use rand::prelude::SliceRandom;
-use ndarray::Array2;
-
-// use crate::training_logs;
+use ndarray::{Array2, Zip};
 
 pub trait Dot<Rhs = Self> {
     type Output;
@@ -976,6 +974,17 @@ impl Matrix {
         Matrix { rows, cols, data }
     }
 
+    pub fn to_ndarray(&self) -> Array2<f64> {
+        Array2::from_shape_vec((self.rows, self.cols), self.data.clone()).unwrap()
+    }
+
+    pub fn from_ndarray(array: Array2<f64>) -> Self {
+        Matrix {
+            rows: array.nrows(),
+            cols: array.ncols(),
+            data: array.into_iter().collect(), // ✅ Safe alternative
+        }
+    }  
 
     // Print the matrices in a readable format
     pub fn pretty_print(&self) {
@@ -991,8 +1000,6 @@ impl Matrix {
 }
 
 
-// Implement element-wise multiplication for Matrix
-// Owned × Owned
 impl Mul for Matrix {
     type Output = Self;
 
@@ -1000,14 +1007,8 @@ impl Mul for Matrix {
         assert_eq!(self.rows, rhs.rows, "Row dimensions must match");
         assert_eq!(self.cols, rhs.cols, "Column dimensions must match");
 
-        let data: Vec<f64> = self
-            .data
-            .iter()
-            .zip(rhs.data.iter())
-            .map(|(a, b)| a * b)
-            .collect();
-
-        Matrix::new(self.rows, self.cols, data)
+        let result_array = self.to_ndarray() * rhs.to_ndarray(); // Element-wise multiplication
+        Matrix::from_ndarray(result_array)
     }
 }
 
@@ -1019,14 +1020,8 @@ impl<'a, 'b> Mul<&'b Matrix> for &'a Matrix {
         assert_eq!(self.rows, rhs.rows, "Row dimensions must match");
         assert_eq!(self.cols, rhs.cols, "Column dimensions must match");
 
-        let data: Vec<f64> = self
-            .data
-            .iter()
-            .zip(rhs.data.iter())
-            .map(|(a, b)| a * b)
-            .collect();
-
-        Matrix::new(self.rows, self.cols, data)
+        let result_array = self.to_ndarray() * rhs.to_ndarray();
+        Matrix::from_ndarray(result_array)
     }
 }
 
@@ -1038,14 +1033,8 @@ impl<'a> Mul<&'a Matrix> for Matrix {
         assert_eq!(self.rows, rhs.rows, "Row dimensions must match");
         assert_eq!(self.cols, rhs.cols, "Column dimensions must match");
 
-        let data: Vec<f64> = self
-            .data
-            .iter()
-            .zip(rhs.data.iter())
-            .map(|(a, b)| a * b)
-            .collect();
-
-        Matrix::new(self.rows, self.cols, data)
+        let result_array = self.to_ndarray() * rhs.to_ndarray();
+        Matrix::from_ndarray(result_array)
     }
 }
 
@@ -1057,40 +1046,37 @@ impl<'a> Mul<Matrix> for &'a Matrix {
         assert_eq!(self.rows, rhs.rows, "Row dimensions must match");
         assert_eq!(self.cols, rhs.cols, "Column dimensions must match");
 
-        let data: Vec<f64> = self
-            .data
-            .iter()
-            .zip(rhs.data.iter())
-            .map(|(a, b)| a * b)
-            .collect();
-
-        Matrix::new(self.rows, self.cols, data)
+        let result_array = self.to_ndarray() * rhs.to_ndarray();
+        Matrix::from_ndarray(result_array)
     }
 }
 
 // Implement Scalar multiplication for Matrix
+// Scalar multiplication (Matrix * f64)
 impl Mul<f64> for Matrix {
     type Output = Self;
 
     fn mul(self, scalar: f64) -> Self::Output {
-        let data: Vec<f64> = self.data.iter().map(|&x| x * scalar).collect();
-        Matrix::new(self.rows, self.cols, data)
+        let result_array = self.to_ndarray() * scalar;
+        Matrix::from_ndarray(result_array)
     }
 }
 
+// Scalar multiplication (&Matrix * f64)
 impl<'a> Mul<f64> for &'a Matrix {
     type Output = Matrix;
 
     fn mul(self, scalar: f64) -> Matrix {
-        let data: Vec<f64> = self.data.iter().map(|&x| x * scalar).collect();
-        Matrix::new(self.rows, self.cols, data)
+        let result_array = self.to_ndarray() * scalar;
+        Matrix::from_ndarray(result_array)
     }
 }
 
-// Implement Scalar multiplication assgn (*=) for Matrix
+// In-place scalar multiplication (Matrix *= f64)
 impl MulAssign<f64> for Matrix {
     fn mul_assign(&mut self, scalar: f64) {
-        self.data.iter_mut().for_each(|x| *x *= scalar); // In-place scaling
+        let result_array = self.to_ndarray() * scalar;
+        *self = Matrix::from_ndarray(result_array);
     }
 }
 
@@ -1140,6 +1126,7 @@ impl Outer for Matrix {
 }
 
 // Implement Add for Matrix
+
 impl Add for Matrix {
     type Output = Self;
 
@@ -1147,18 +1134,15 @@ impl Add for Matrix {
         assert_eq!(self.rows, rhs.rows, "Row dimensions must match");
         assert_eq!(self.cols, rhs.cols, "Column dimensions must match");
 
-        let data: Vec<f64> = self
-            .data
-            .iter()
-            .zip(rhs.data.iter())
-            .map(|(a, b)| a + b) // Element-wise addition
-            .collect();
+        let left_array = self.to_ndarray();
+        let right_array = rhs.to_ndarray();
 
-        Matrix::new(self.rows, self.cols, data)
+        let result_array = left_array + right_array;
+        Matrix::from_ndarray(result_array)
     }
 }
 
-// Implement Add for &Matrix
+// Add for &Matrix
 impl Add for &Matrix {
     type Output = Matrix;
 
@@ -1166,14 +1150,11 @@ impl Add for &Matrix {
         assert_eq!(self.rows, rhs.rows, "Row dimensions must match");
         assert_eq!(self.cols, rhs.cols, "Column dimensions must match");
 
-        let data: Vec<f64> = self
-            .data
-            .iter()
-            .zip(rhs.data.iter())
-            .map(|(a, b)| a + b) // Element-wise addition
-            .collect();
+        let left_array = self.to_ndarray();
+        let right_array = rhs.to_ndarray();
 
-        Matrix::new(self.rows, self.cols, data)
+        let result_array = &left_array + &right_array;
+        Matrix::from_ndarray(result_array)
     }
 }
 
@@ -1183,19 +1164,28 @@ impl AddAssign for Matrix {
         assert_eq!(self.rows, rhs.rows, "Row dimensions must match");
         assert_eq!(self.cols, rhs.cols, "Column dimensions must match");
 
-        self.data.iter_mut()
-            .zip(rhs.data.iter())
-            .for_each(|(a, b)| *a += b); // Element-wise addition, in-place
+        let rhs_array = rhs.to_ndarray();
+        let mut self_array = self.to_ndarray();
+
+        // In-place addition using `Zip`
+        Zip::from(&mut self_array)
+            .and(&rhs_array)
+            .for_each(|a, &b| *a += b);
+
+        *self = Matrix::from_ndarray(self_array);
     }
 }
 
+// AddAssign for scalar (Matrix += f64)
 impl AddAssign<f64> for Matrix {
     fn add_assign(&mut self, rhs: f64) {
-        self.data.iter_mut().for_each(|a| *a += rhs);
+        let mut self_array = self.to_ndarray();
+        self_array.mapv_inplace(|x| x + rhs);
+
+        *self = Matrix::from_ndarray(self_array);
     }
 }
 
-// Sub for owned matrices (Matrix - Matrix)
 impl Sub for Matrix {
     type Output = Matrix;
 
@@ -1203,18 +1193,14 @@ impl Sub for Matrix {
         assert_eq!(self.rows, rhs.rows, "Row dimensions must match");
         assert_eq!(self.cols, rhs.cols, "Column dimensions must match");
 
-        let data: Vec<f64> = self
-            .data
-            .iter()
-            .zip(rhs.data.iter())
-            .map(|(a, b)| a - b)
-            .collect();
+        let left_array = self.to_ndarray();
+        let right_array = rhs.to_ndarray();
 
-        Matrix::new(self.rows, self.cols, data)
+        let result_array = &left_array - &right_array; // Element-wise subtraction
+        Matrix::from_ndarray(result_array)
     }
 }
 
-// Sub for borrowing a matrix (&Matrix - &Matrix)
 impl<'a, 'b> Sub<&'b Matrix> for &'a Matrix {
     type Output = Matrix;
 
@@ -1222,18 +1208,14 @@ impl<'a, 'b> Sub<&'b Matrix> for &'a Matrix {
         assert_eq!(self.rows, rhs.rows, "Row dimensions must match");
         assert_eq!(self.cols, rhs.cols, "Column dimensions must match");
 
-        let data: Vec<f64> = self
-            .data
-            .iter()
-            .zip(rhs.data.iter())
-            .map(|(a, b)| a - b)
-            .collect();
+        let left_array = self.to_ndarray();
+        let right_array = rhs.to_ndarray();
 
-        Matrix::new(self.rows, self.cols, data)
+        let result_array = &left_array - &right_array;
+        Matrix::from_ndarray(result_array)
     }
 }
 
-// Sub for owned Matrix with a reference Matrix (Matrix - &Matrix)
 impl<'a> Sub<&'a Matrix> for Matrix {
     type Output = Matrix;
 
@@ -1241,18 +1223,14 @@ impl<'a> Sub<&'a Matrix> for Matrix {
         assert_eq!(self.rows, rhs.rows, "Row dimensions must match");
         assert_eq!(self.cols, rhs.cols, "Column dimensions must match");
 
-        let data: Vec<f64> = self
-            .data
-            .iter()
-            .zip(rhs.data.iter())
-            .map(|(a, b)| a - b)
-            .collect();
+        let left_array = self.to_ndarray();
+        let right_array = rhs.to_ndarray();
 
-        Matrix::new(self.rows, self.cols, data)
+        let result_array = &left_array - &right_array;
+        Matrix::from_ndarray(result_array)
     }
 }
 
-// Sub for borrowing Matrix with an owned Matrix (&Matrix - Matrix)
 impl<'a> Sub<Matrix> for &'a Matrix {
     type Output = Matrix;
 
@@ -1260,26 +1238,25 @@ impl<'a> Sub<Matrix> for &'a Matrix {
         assert_eq!(self.rows, rhs.rows, "Row dimensions must match");
         assert_eq!(self.cols, rhs.cols, "Column dimensions must match");
 
-        let data: Vec<f64> = self
-            .data
-            .iter()
-            .zip(rhs.data.iter())
-            .map(|(a, b)| a - b)
-            .collect();
+        let left_array = self.to_ndarray();
+        let right_array = rhs.to_ndarray();
 
-        Matrix::new(self.rows, self.cols, data)
+        let result_array = &left_array - &right_array;
+        Matrix::from_ndarray(result_array)
     }
 }
 
-// Implement remove (SubAssign -=) for Matrix
 impl SubAssign for Matrix {
     fn sub_assign(&mut self, rhs: Self) {
         assert_eq!(self.rows, rhs.rows, "Row dimensions must match");
         assert_eq!(self.cols, rhs.cols, "Column dimensions must match");
 
-        self.data.iter_mut()
-            .zip(rhs.data.iter())
-            .for_each(|(a, b)| *a -= b); // In-place element-wise subtraction
+        let mut left_array = self.to_ndarray();
+        let right_array = rhs.to_ndarray();
+
+        left_array -= &right_array; // In-place element-wise subtraction
+
+        *self = Matrix::from_ndarray(left_array);
     }
 }
 
@@ -1287,25 +1264,20 @@ impl Div<f64> for Matrix {
     type Output = Matrix;
 
     fn div(self, scalar: f64) -> Matrix {
-        let data: Vec<f64> = self.data.iter().map(|&x| x / scalar).collect();
-        Matrix {
-            rows: self.rows,
-            cols: self.cols,
-            data,
-        }
+        let array = self.to_ndarray();
+        let result_array = &array / scalar; // Element-wise division
+        Matrix::from_ndarray(result_array)
     }
 }
 
-impl<'a> Div<f64> for &'a Matrix {
+// Borrowed version (`&Matrix / f64`)
+impl Div<f64> for &Matrix {
     type Output = Matrix;
 
     fn div(self, scalar: f64) -> Matrix {
-        let data: Vec<f64> = self.data.iter().map(|&x| x / scalar).collect();
-        Matrix {
-            rows: self.rows,
-            cols: self.cols,
-            data,
-        }
+        let array = self.to_ndarray();
+        let result_array = &array / scalar;
+        Matrix::from_ndarray(result_array)
     }
 }
 
@@ -1316,24 +1288,20 @@ impl Div<&Matrix> for Matrix {
         assert_eq!(self.rows, rhs.rows, "Row dimensions must match");
         assert_eq!(self.cols, rhs.cols, "Column dimensions must match");
 
-        let data: Vec<f64> = self
-            .data
-            .iter()
-            .zip(rhs.data.iter())
-            .map(|(&a, &b)| a / b)
-            .collect();
+        let left_array = self.to_ndarray();
+        let right_array = rhs.to_ndarray();
 
-        Matrix {
-            rows: self.rows,
-            cols: self.cols,
-            data,
-        }
+        let result_array = &left_array / &right_array; // Element-wise division
+        Matrix::from_ndarray(result_array)
     }
 }
 
 impl<T: Into<f64> + Copy> DivAssign<T> for Matrix {
     fn div_assign(&mut self, scalar: T) {
         let scalar_f64 = scalar.into();
-        self.data.iter_mut().for_each(|x| *x /= scalar_f64);
+        let mut array = self.to_ndarray();
+        array.mapv_inplace(|x| x / scalar_f64); // In-place division
+
+        *self = Matrix::from_ndarray(array);
     }
 }
