@@ -26,8 +26,11 @@ use std::ops::Add;
 use std::ops::AddAssign;
 use std::ops::Sub;
 use std::ops::SubAssign;
+use rand::thread_rng;
 use rand_distr::Normal;
 use rand_distr::Distribution;
+use rand::prelude::SliceRandom;
+use ndarray::Array2;
 
 // use crate::training_logs;
 
@@ -201,26 +204,6 @@ impl Matrix {
         Matrix::new(self.rows, self.cols, log_softmax_data)
     }
 
-    // pub fn softmax(&self) -> Matrix {
-    //     let mut result_data = Vec::new();
-        
-    //     for row in 0..self.rows {
-    //         let start = row * self.cols;
-    //         let end = start + self.cols;
-    //         let row_slice = &self.data[start..end];
-
-    //         // Apply softmax directly without normalizing the logits
-    //         let processed_row = self.softmax_row(&row_slice);
-
-    //         result_data.extend_from_slice(&processed_row);
-    //     }
-
-    //     Matrix {
-    //         rows: self.rows,
-    //         cols: self.cols,
-    //         data: result_data,
-    //     }
-    // }
 
     pub fn softmax(&self) -> Matrix {
         let mut result_data = Vec::new();
@@ -281,6 +264,101 @@ impl Matrix {
         let softmax_output: Vec<f64> = exp_values.iter().map(|&x| x / sum_exp).collect();
 
         softmax_output
+    }
+
+    //convolve
+    pub fn convolve(&self, kernel: &Matrix, stride: usize, padding: usize) -> Matrix {
+        let (kernel_rows, kernel_cols) = (kernel.rows, kernel.cols);
+        let (input_rows, input_cols) = (self.rows, self.cols);
+
+        // Compute output dimensions based on padding
+        let output_rows = (input_rows + 2 * padding - kernel_rows) / stride + 1;
+        let output_cols = (input_cols + 2 * padding - kernel_cols) / stride + 1;
+        let mut output_data = vec![0.0; output_rows * output_cols];
+
+        for row in 0..output_rows {
+            for col in 0..output_cols {
+                let mut sum = 0.0;
+
+                for k_row in 0..kernel_rows {
+                    for k_col in 0..kernel_cols {
+                        let input_row = row * stride + k_row;
+                        let input_col = col * stride + k_col;
+
+                        if input_row < input_rows && input_col < input_cols {
+                            let input_idx = input_row * input_cols + input_col;
+                            let kernel_idx = k_row * kernel_cols + k_col;
+                            sum += self.data[input_idx] * kernel.data[kernel_idx];
+                        }
+                    }
+                }
+
+                let output_idx = row * output_cols + col;
+                output_data[output_idx] = sum;
+            }
+        }
+
+        Matrix::new(output_rows, output_cols, output_data)
+    }
+
+    pub fn max_pooling(&self, pool_size: usize, stride: usize) -> Matrix {
+        let output_rows = (self.rows - pool_size) / stride + 1;
+        let output_cols = (self.cols - pool_size) / stride + 1;
+        let mut output_data = vec![0.0; output_rows * output_cols];
+
+        for row in 0..output_rows {
+            for col in 0..output_cols {
+                let mut max_val = f64::NEG_INFINITY;
+
+                for p_row in 0..pool_size {
+                    for p_col in 0..pool_size {
+                        let input_row = row * stride + p_row;
+                        let input_col = col * stride + p_col;
+
+                        if input_row < self.rows && input_col < self.cols {
+                            let idx = input_row * self.cols + input_col;
+                            max_val = max_val.max(self.data[idx]);
+                        }
+                    }
+                }
+
+                let output_idx = row * output_cols + col;
+                output_data[output_idx] = max_val;
+            }
+        }
+
+        Matrix::new(output_rows, output_cols, output_data)
+    }
+
+    pub fn avg_pooling(&self, pool_size: usize, stride: usize) -> Matrix {
+        let output_rows = (self.rows - pool_size) / stride + 1;
+        let output_cols = (self.cols - pool_size) / stride + 1;
+        let mut output_data = vec![0.0; output_rows * output_cols];
+
+        for row in 0..output_rows {
+            for col in 0..output_cols {
+                let mut sum = 0.0;
+                let mut count = 0;
+
+                for p_row in 0..pool_size {
+                    for p_col in 0..pool_size {
+                        let input_row = row * stride + p_row;
+                        let input_col = col * stride + p_col;
+
+                        if input_row < self.rows && input_col < self.cols {
+                            let idx = input_row * self.cols + input_col;
+                            sum += self.data[idx];
+                            count += 1;
+                        }
+                    }
+                }
+
+                let output_idx = row * output_cols + col;
+                output_data[output_idx] = sum / count as f64; // Compute mean
+            }
+        }
+
+        Matrix::new(output_rows, output_cols, output_data)
     }
 
     // Mutable access to matrix elements
@@ -462,6 +540,52 @@ impl Matrix {
         Matrix::new(1, num_classes, data)
     }
 
+    //shuffle
+    pub fn shuffle(&mut self) {
+        let mut rng = thread_rng();
+        let mut row_indices: Vec<usize> = (0..self.rows).collect();
+        row_indices.shuffle(&mut rng);
+
+        let mut shuffled_data = vec![0.0; self.data.len()];
+
+        for (new_row_idx, &original_row_idx) in row_indices.iter().enumerate() {
+            let orig_start = original_row_idx * self.cols;
+            let orig_end = orig_start + self.cols;
+            let new_start = new_row_idx * self.cols;
+
+            shuffled_data[new_start..new_start + self.cols]
+                .copy_from_slice(&self.data[orig_start..orig_end]);
+        }
+
+        self.data = shuffled_data;
+    }
+
+    pub fn shuffled(matrix: &Matrix, labels: &Vec<f64>) -> (Matrix, Vec<f64>) {
+        assert_eq!(matrix.rows, labels.len(), "Matrix rows and labels must have the same length");
+
+        let mut rng = thread_rng();
+        let mut indices: Vec<usize> = (0..matrix.rows).collect();
+        indices.shuffle(&mut rng);
+
+        let mut shuffled_data = vec![0.0; matrix.data.len()];
+        let mut shuffled_labels = vec![0.0; labels.len()];
+
+        for (new_idx, &original_idx) in indices.iter().enumerate() {
+            let orig_start = original_idx * matrix.cols;
+            let orig_end = orig_start + matrix.cols;
+            let new_start = new_idx * matrix.cols;
+
+            // Copy shuffled rows
+            shuffled_data[new_start..new_start + matrix.cols]
+                .copy_from_slice(&matrix.data[orig_start..orig_end]);
+
+            // Copy corresponding shuffled labels
+            shuffled_labels[new_idx] = labels[original_idx];
+        }
+
+        let shuffled_matrix = Matrix::new(matrix.rows, matrix.cols, shuffled_data);
+        (shuffled_matrix, shuffled_labels)
+    }
 
     // The attention mechanism involves scaling the dot product of queries (Q) and keys (K) 
     // by the square root of the dimensionality of the keys √dk) to stabilize gradients.
@@ -976,28 +1100,14 @@ impl Dot for Matrix {
     fn dot(&self, other: &Matrix) -> Self::Output {
         assert_eq!(self.cols, other.rows, "Matrix dimension mismatch for dot product");
 
-        let block_size = 64; // Cache-friendly block size (adjust as needed)
-        let mut result = Matrix::zeros(self.rows, other.cols);
+        let self_array = Array2::from_shape_vec((self.rows, self.cols), self.data.clone()).unwrap();
+        let other_array = Array2::from_shape_vec((other.rows, other.cols), other.data.clone()).unwrap();
 
-        for i_block in (0..self.rows).step_by(block_size) {
-            for j_block in (0..other.cols).step_by(block_size) {
-                for k_block in (0..self.cols).step_by(block_size) {
-                    for i in i_block..(i_block + block_size).min(self.rows) {
-                        for j in j_block..(j_block + block_size).min(other.cols) {
-                            let mut sum = 0.0;
-                            for k in k_block..(k_block + block_size).min(self.cols) {
-                                sum += self.data[i * self.cols + k] * other.data[k * other.cols + j];
-                            }
-                            result.data[i * other.cols + j] += sum;
-                        }
-                    }
-                }
-            }
-        }
+        // Optimized matrix multiplication
+        let result_array = self_array.dot(&other_array);
 
-        result
+        Matrix::new(self.rows, other.cols, result_array.into_iter().collect()) // Replaces into_raw_vec()
     }
-
 }
 
 // Implement Outer product for matrix
