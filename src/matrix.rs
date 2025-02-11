@@ -30,7 +30,7 @@ use rand::thread_rng;
 use rand_distr::Normal;
 use rand_distr::Distribution;
 use rand::prelude::SliceRandom;
-use ndarray::{Array2, Zip};
+use ndarray::{ArrayView2, Array2, Zip};
 
 pub trait Dot<Rhs = Self> {
     type Output;
@@ -1086,14 +1086,17 @@ impl Dot for Matrix {
     fn dot(&self, other: &Matrix) -> Self::Output {
         assert_eq!(self.cols, other.rows, "Matrix dimension mismatch for dot product");
 
-        let self_array = Array2::from_shape_vec((self.rows, self.cols), self.data.clone()).unwrap();
-        let other_array = Array2::from_shape_vec((other.rows, other.cols), other.data.clone()).unwrap();
+        //Use zero-copy views instead of creating new allocations
+        let self_array = ArrayView2::from_shape((self.rows, self.cols), &self.data).unwrap();
+        let other_array = ArrayView2::from_shape((other.rows, other.cols), &other.data).unwrap();
 
-        // Optimized matrix multiplication
+        //Optimized matrix multiplication
         let result_array = self_array.dot(&other_array);
 
-        Matrix::new(self.rows, other.cols, result_array.into_iter().collect()) // Replaces into_raw_vec()
+        //Extract the slice without extra allocation
+        Matrix::new(self.rows, other.cols, result_array.as_slice().unwrap().to_vec())
     }
+    
 }
 
 // Implement Outer product for matrix
