@@ -31,6 +31,9 @@ use rand_distr::Normal;
 use rand_distr::Distribution;
 use rand::prelude::SliceRandom;
 use ndarray::{ArrayView2, Array2, Zip};
+pub enum Orientation {
+    RowWise, ColumnWise
+}
 
 pub trait Dot<Rhs = Self> {
     type Output;
@@ -178,11 +181,38 @@ impl Matrix {
             .expect("Slice is empty")
     }
     
-    pub fn sample(&self, row:usize, n_elements:usize) -> Vec<f64> {
+    pub fn sample(&self, row: usize, n_elements:usize) -> Vec<f64> {
         let start = row * self.cols;
         let end = start + n_elements;
         self.data[start..end].to_vec()
     }
+
+    pub fn get_filter(&self, from_row: usize, filter_size: usize) -> Result<Matrix, String> {
+    if from_row + filter_size > self.rows {
+        return Err(format!(
+            "Your current filter {} does not work with the image! Choose a filter size that divides evenly into {}.", filter_size,
+            self.rows
+        ));
+    }
+
+        Ok(self.get_patch(from_row, 0, filter_size, filter_size))
+    }
+
+    pub fn get_patch(&self, start_row: usize, start_col: usize, height: usize, width: usize) -> Matrix {
+        assert!(start_row + height <= self.rows, "Submatrix exceeds row bounds");
+        assert!(start_col + width <= self.cols, "Submatrix exceeds column bounds");
+
+        let mut sub_data = Vec::with_capacity(height * width);
+
+        for r in start_row..start_row + height {
+            let start_idx = r * self.cols + start_col;
+            let end_idx = start_idx + width;
+            sub_data.extend_from_slice(&self.data[start_idx..end_idx]);
+        }
+
+        Matrix::new(height, width, sub_data)
+    }
+
 
     pub fn log_softmax(&self) -> Matrix {
         let mut log_softmax_data = Vec::new();
@@ -236,9 +266,22 @@ impl Matrix {
         }
     }
 
-    pub fn clamp_to(&mut self, min: f64, max: f64) {
+    pub fn clamp_to_mut(&mut self, min: f64, max: f64) {
         self.data.iter_mut().for_each(|x| *x = x.max(min).min(max));
     }
+
+
+    pub fn clamp_to(&self, min: f64, max: f64) -> Matrix {
+        let data = self
+            .data
+            .iter()
+            .map(|&x| x.max(min).min(max)) // Clamp each value
+            .collect();
+
+        Matrix::new(self.rows, self.cols, data)
+    }
+
+
 
     pub fn clip_gradients_to(&mut self, threshold: f64) {
         let norm = (self.data.iter().map(|x| x * x).sum::<f64>()).sqrt();
@@ -299,19 +342,53 @@ impl Matrix {
         Matrix::new(output_rows, output_cols, output_data)
     }
 
+    // pub fn max_pooling(&self, pool_size: usize, stride: usize) -> Matrix {
+    //     let output_rows = (self.rows - pool_size) / stride + 1;
+    //     let output_cols = (self.cols - pool_size) / stride + 1;
+    //     let mut output_data = vec![0.0; output_rows * output_cols];
+
+    //     for row in 0..output_rows {
+    //         for col in 0..output_cols {
+    //             let mut max_val = f64::NEG_INFINITY;
+
+    //             for p_row in 0..pool_size {
+    //                 for p_col in 0..pool_size {
+    //                     let input_row = row * stride + p_row;
+    //                     let input_col = col * stride + p_col;
+
+    //                     if input_row < self.rows && input_col < self.cols {
+    //                         let idx = input_row * self.cols + input_col;
+    //                         max_val = max_val.max(self.data[idx]);
+    //                     }
+    //                 }
+    //             }
+
+    //             let output_idx = row * output_cols + col;
+    //             output_data[output_idx] = max_val;
+    //         }
+    //     }
+
+    //     Matrix::new(output_rows, output_cols, output_data)
+    // }
+
     pub fn max_pooling(&self, pool_size: usize, stride: usize) -> Matrix {
         let output_rows = (self.rows - pool_size) / stride + 1;
         let output_cols = (self.cols - pool_size) / stride + 1;
-        let mut output_data = vec![0.0; output_rows * output_cols];
+        
+        if output_rows == 0 || output_cols == 0 {
+            panic!("Pooling size is too large for given input matrix! Input: {}x{}, Pool: {}", self.rows, self.cols, pool_size);
+        }
 
-        for row in 0..output_rows {
-            for col in 0..output_cols {
+        let mut output_data = Vec::with_capacity(output_rows * output_cols);
+
+        for row in (0..self.rows - pool_size + 1).step_by(stride) {
+            for col in (0..self.cols - pool_size + 1).step_by(stride) {
                 let mut max_val = f64::NEG_INFINITY;
 
                 for p_row in 0..pool_size {
                     for p_col in 0..pool_size {
-                        let input_row = row * stride + p_row;
-                        let input_col = col * stride + p_col;
+                        let input_row = row + p_row;
+                        let input_col = col + p_col;
 
                         if input_row < self.rows && input_col < self.cols {
                             let idx = input_row * self.cols + input_col;
@@ -319,9 +396,7 @@ impl Matrix {
                         }
                     }
                 }
-
-                let output_idx = row * output_cols + col;
-                output_data[output_idx] = max_val;
+                output_data.push(max_val);
             }
         }
 
@@ -558,7 +633,7 @@ impl Matrix {
         self.data = shuffled_data;
     }
 
-    pub fn shuffled(matrix: &Matrix, labels: &Vec<f64>) -> (Matrix, Vec<f64>) {
+    pub fn shuffled(matrix: &Matrix, labels: &Vec<usize>) -> (Matrix, Vec<usize>) {
         assert_eq!(matrix.rows, labels.len(), "Matrix rows and labels must have the same length");
 
         let mut rng = thread_rng();
@@ -566,7 +641,7 @@ impl Matrix {
         indices.shuffle(&mut rng);
 
         let mut shuffled_data = vec![0.0; matrix.data.len()];
-        let mut shuffled_labels = vec![0.0; labels.len()];
+        let mut shuffled_labels = vec![0; labels.len()];
 
         for (new_idx, &original_idx) in indices.iter().enumerate() {
             let orig_start = original_idx * matrix.cols;
@@ -864,16 +939,29 @@ impl Matrix {
         }
     }
 
-   pub fn sum_rows(&self) -> Matrix {
-        let mut sums = vec![0.0; self.cols]; // Initialize a vector to store the sums
-
+    pub fn sum_columns(&self) -> Matrix {
+        let mut sums = vec![0.0; self.cols]; // Column-wise sum (sum over rows)
         for row in 0..self.rows {
             for col in 0..self.cols {
-                sums[col] += self.data[row * self.cols + col]; // Accumulate the sum for each column
+                sums[col] += self.data[row * self.cols + col];
             }
         }
-
         Matrix::from_shape(1, self.cols, sums) // Return as a row vector
+    }
+
+    pub fn sum_rows(&self) -> Matrix {
+        let mut sums = vec![0.0; self.rows]; // Row-wise sum (sum over columns)
+        for row in 0..self.rows {
+            sums[row] = self.data[row * self.cols..(row + 1) * self.cols].iter().sum();
+        }
+        Matrix::from_shape(self.rows, 1, sums) // Return as a column vector
+    }
+
+    pub fn sum_axis(&self, orientation: Orientation) -> Matrix {
+        match orientation {
+            Orientation::ColumnWise => self.sum_columns(), // Sum over rows (produce a row vector)
+            Orientation::RowWise => self.sum_rows(),      // Sum over columns (produce a column vector)
+        }
     }
 
     pub fn standard_dev(&self, axis: usize, means: Option<&Matrix>) -> Matrix {
@@ -1157,6 +1245,22 @@ impl Add for &Matrix {
         let right_array = rhs.to_ndarray();
 
         let result_array = &left_array + &right_array;
+        Matrix::from_ndarray(result_array)
+    }
+}
+
+// Implement `Add<&Matrix>` for `Matrix`
+impl Add<&Matrix> for Matrix {
+    type Output = Matrix;
+
+    fn add(self, rhs: &Matrix) -> Matrix {
+        assert_eq!(self.rows, rhs.rows, "Row dimensions must match");
+        assert_eq!(self.cols, rhs.cols, "Column dimensions must match");
+
+        let left_array = self.to_ndarray();
+        let right_array = rhs.to_ndarray();
+
+        let result_array = left_array + right_array;
         Matrix::from_ndarray(result_array)
     }
 }
