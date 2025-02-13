@@ -31,6 +31,25 @@ use rand_distr::Normal;
 use rand_distr::Distribution;
 use rand::prelude::SliceRandom;
 use ndarray::{ArrayView2, Array2, Zip};
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlatteningStrategy {
+    MeanPooling,
+    Strided,
+    Convolution,
+}
+impl FlatteningStrategy {
+    pub fn from_str(strategy: &str) -> Self {
+        match strategy.to_lowercase().as_str() {
+            "mean_pooling" => FlatteningStrategy::MeanPooling,
+            "strided" => FlatteningStrategy::Strided,
+            "convolution" => FlatteningStrategy::Convolution,
+            _ => FlatteningStrategy::MeanPooling, // Default fallback
+        }
+    }
+}
+
 pub enum Orientation {
     RowWise, ColumnWise
 }
@@ -71,7 +90,6 @@ impl Matrix {
             &self.data[start..end]
         })
     }
-
 
     // Zero-initialized matrix
     pub fn zeros(rows: usize, cols: usize) -> Self {
@@ -171,6 +189,69 @@ impl Matrix {
             .unwrap_or_else(|| panic!("Matrix is empty, cannot compute argmax."))
     }
 
+    pub fn flatten(matrices: Vec<Matrix>) -> Matrix {
+        // Compute total number of features after flattening
+        let total_features = matrices.iter().map(|m| m.data.len()).sum::<usize>();
+
+        // Collect all feature map data into a single Vec<f64>
+        let mut flattened_data = Vec::with_capacity(total_features);
+        for feature_map in matrices {
+            flattened_data.extend_from_slice(&feature_map.data);
+        }
+
+        // Return a 1-row matrix containing all feature map values
+        Matrix::new(1, total_features, flattened_data)
+
+    }
+
+    pub fn flatten_with_strategy(feature_maps: Vec<Matrix>, strategy: FlatteningStrategy, target_size: usize) -> Matrix {
+        match strategy {
+            FlatteningStrategy::MeanPooling => Self::mean_pooling_flatten(feature_maps, target_size),
+            FlatteningStrategy::Strided => Self::strided_flatten(feature_maps, target_size),
+            FlatteningStrategy::Convolution => Self::convolution_flatten(feature_maps, target_size),
+        }
+    }
+
+    /// Mean Pooling Flattening: Downsamples the feature maps by averaging adjacent values
+    fn mean_pooling_flatten(feature_maps: Vec<Matrix>, target_size: usize) -> Matrix {
+        let total_features = feature_maps.iter().map(|m| m.data.len()).sum::<usize>();
+
+        // Determine the factor to downsample by
+        let factor = total_features / target_size;
+        if factor == 0 {
+            panic!("Target size {} is too large for available features: {}", target_size, total_features);
+        }
+
+        // Flatten all feature maps into a single Vec<f64> first
+        let flattened: Vec<f64> = feature_maps.iter().flat_map(|m| &m.data).copied().collect();
+
+        let pooled_data: Vec<f64> = flattened
+            .chunks(factor) // Now split into groups
+            .map(|chunk| chunk.iter().sum::<f64>() / chunk.len() as f64) // Compute mean per group
+            .collect();
+
+        Matrix::new(1, target_size, pooled_data)
+    }
+
+    /// Strided Flattening: Selects every nth value to downsample
+    fn strided_flatten(feature_maps: Vec<Matrix>, target_size: usize) -> Matrix {
+        let flattened_data: Vec<f64> = feature_maps
+            .iter()
+            .flat_map(|m| &m.data)
+            .step_by(feature_maps.iter().map(|m| m.data.len()).sum::<usize>() / target_size)
+            .copied()
+            .collect();
+
+        Matrix::new(1, target_size, flattened_data)
+    }
+
+    /// Convolution-Based Flattening: Placeholder for 1x1 convolution-based approach
+    fn convolution_flatten(feature_maps: Vec<Matrix>, target_size: usize) -> Matrix {
+        println!("Convolution-based flattening is not implemented yet.");
+        println!("{:?}", feature_maps.len());
+        Matrix::new(1, target_size, vec![0.0; target_size]) // Placeholder return
+    }
+
     // argmax_row
     pub fn argmax_row(slice: &[f64]) -> usize {
         slice
@@ -187,7 +268,7 @@ impl Matrix {
         self.data[start..end].to_vec()
     }
 
-    pub fn get_filter(&self, from_row: usize, filter_size: usize) -> Result<Matrix, String> {
+    pub fn get_filter(&self, from_row: usize, from_col:usize, filter_size: usize) -> Result<Matrix, String> {
     if from_row + filter_size > self.rows {
         return Err(format!(
             "Your current filter {} does not work with the image! Choose a filter size that divides evenly into {}.", filter_size,
@@ -195,9 +276,10 @@ impl Matrix {
         ));
     }
 
-        Ok(self.get_patch(from_row, 0, filter_size, filter_size))
+        Ok(self.get_patch(from_row, from_col, filter_size, filter_size))
     }
 
+    // get_patch
     pub fn get_patch(&self, start_row: usize, start_col: usize, height: usize, width: usize) -> Matrix {
         assert!(start_row + height <= self.rows, "Submatrix exceeds row bounds");
         assert!(start_col + width <= self.cols, "Submatrix exceeds column bounds");
@@ -210,9 +292,9 @@ impl Matrix {
             sub_data.extend_from_slice(&self.data[start_idx..end_idx]);
         }
 
-        Matrix::new(height, width, sub_data)
+        // Ensure output is always 1x(height * width) for dot product
+        Matrix::new(1, height * width, sub_data) // Reshape into 1D matrix
     }
-
 
     pub fn log_softmax(&self) -> Matrix {
         let mut log_softmax_data = Vec::new();
@@ -341,35 +423,6 @@ impl Matrix {
 
         Matrix::new(output_rows, output_cols, output_data)
     }
-
-    // pub fn max_pooling(&self, pool_size: usize, stride: usize) -> Matrix {
-    //     let output_rows = (self.rows - pool_size) / stride + 1;
-    //     let output_cols = (self.cols - pool_size) / stride + 1;
-    //     let mut output_data = vec![0.0; output_rows * output_cols];
-
-    //     for row in 0..output_rows {
-    //         for col in 0..output_cols {
-    //             let mut max_val = f64::NEG_INFINITY;
-
-    //             for p_row in 0..pool_size {
-    //                 for p_col in 0..pool_size {
-    //                     let input_row = row * stride + p_row;
-    //                     let input_col = col * stride + p_col;
-
-    //                     if input_row < self.rows && input_col < self.cols {
-    //                         let idx = input_row * self.cols + input_col;
-    //                         max_val = max_val.max(self.data[idx]);
-    //                     }
-    //                 }
-    //             }
-
-    //             let output_idx = row * output_cols + col;
-    //             output_data[output_idx] = max_val;
-    //         }
-    //     }
-
-    //     Matrix::new(output_rows, output_cols, output_data)
-    // }
 
     pub fn max_pooling(&self, pool_size: usize, stride: usize) -> Matrix {
         let output_rows = (self.rows - pool_size) / stride + 1;
