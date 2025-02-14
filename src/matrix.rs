@@ -18,22 +18,15 @@
 //! This will bring the `Matrix` struct as well as the `Dot` and `Outer` traits into scope, allowing you to perform matrix operations like dot products and outer products.
 
 // traits
-use std::ops::Mul;
-use std::ops::MulAssign;
-use std::ops::Div;
-use std::ops::DivAssign;
-use std::ops::Add;
-use std::ops::AddAssign;
-use std::ops::Sub;
-use std::ops::SubAssign;
+use std::ops::{Mul, MulAssign, Div, DivAssign, Add, AddAssign, Sub, SubAssign};
 use rand::thread_rng;
-use rand_distr::Normal;
-use rand_distr::Distribution;
+use rand_distr::{Normal, Distribution};
 use rand::prelude::SliceRandom;
 use ndarray::{ArrayView2, Array2, Zip};
+use serde::{Deserialize, Serialize};
 
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 pub enum FlatteningStrategy {
     MeanPooling,
     Strided,
@@ -204,51 +197,107 @@ impl Matrix {
 
     }
 
-    pub fn flatten_with_strategy(feature_maps: Vec<Matrix>, strategy: FlatteningStrategy, target_size: usize) -> Matrix {
+    pub fn flatten_batch(feature_maps: Vec<Matrix>, batch_size: usize) -> Matrix {
+        let total_features = feature_maps.iter().map(|m| m.data.len()).sum::<usize>();
+
+        // Ensure total features is evenly divisible by batch_size
+        assert!(
+            total_features % batch_size == 0,
+            "Total feature count {} is not evenly divisible by batch size {}",
+            total_features,
+            batch_size
+        );
+
+        let new_cols = total_features / batch_size;
+
+        // Flatten feature maps while keeping batch structure
+        let flattened_data: Vec<f64> = feature_maps
+            .into_iter()
+            .flat_map(|m| m.data) // Flatten all feature maps into a 1D Vec
+            .collect();
+
+        Matrix::new(batch_size, new_cols, flattened_data)
+    }
+
+    pub fn flatten_with_strategy(
+        feature_maps: Vec<Matrix>, 
+        strategy: FlatteningStrategy, 
+        target_size: usize, 
+        batch_size: usize
+    ) -> Matrix {
         match strategy {
-            FlatteningStrategy::MeanPooling => Self::mean_pooling_flatten(feature_maps, target_size),
-            FlatteningStrategy::Strided => Self::strided_flatten(feature_maps, target_size),
-            FlatteningStrategy::Convolution => Self::convolution_flatten(feature_maps, target_size),
+            FlatteningStrategy::MeanPooling => Self::mean_pooling_flatten(feature_maps, target_size, batch_size),
+            FlatteningStrategy::Strided => Self::strided_flatten(feature_maps, target_size, batch_size),
+            FlatteningStrategy::Convolution => Self::convolution_flatten(feature_maps, target_size, batch_size),
         }
     }
 
     /// Mean Pooling Flattening: Downsamples the feature maps by averaging adjacent values
-    fn mean_pooling_flatten(feature_maps: Vec<Matrix>, target_size: usize) -> Matrix {
+    pub fn mean_pooling_flatten(feature_maps: Vec<Matrix>, target_size: usize, batch_size: usize) -> Matrix {
         let total_features = feature_maps.iter().map(|m| m.data.len()).sum::<usize>();
 
-        // Determine the factor to downsample by
-        let factor = total_features / target_size;
+        assert!(
+            total_features % batch_size == 0,
+            "Total feature count {} is not evenly divisible by batch size {}",
+            total_features,
+            batch_size
+        );
+
+        let features_per_batch = total_features / batch_size;
+        let factor = features_per_batch / target_size;
+
         if factor == 0 {
-            panic!("Target size {} is too large for available features: {}", target_size, total_features);
+            panic!(
+                "Target size {} is too large for available features per batch: {}",
+                target_size, features_per_batch
+            );
         }
 
-        // Flatten all feature maps into a single Vec<f64> first
         let flattened: Vec<f64> = feature_maps.iter().flat_map(|m| &m.data).copied().collect();
 
         let pooled_data: Vec<f64> = flattened
-            .chunks(factor) // Now split into groups
-            .map(|chunk| chunk.iter().sum::<f64>() / chunk.len() as f64) // Compute mean per group
+            .chunks(features_per_batch) // Split by batch
+            .flat_map(|batch_chunk| {
+                batch_chunk
+                    .chunks(factor) // Reduce each batch separately
+                    .map(|chunk| chunk.iter().sum::<f64>() / chunk.len() as f64)
+                    .collect::<Vec<f64>>()
+            })
             .collect();
 
-        Matrix::new(1, target_size, pooled_data)
+        Matrix::new(batch_size, target_size, pooled_data)
     }
-
+ 
     /// Strided Flattening: Selects every nth value to downsample
-    fn strided_flatten(feature_maps: Vec<Matrix>, target_size: usize) -> Matrix {
-        let flattened_data: Vec<f64> = feature_maps
-            .iter()
-            .flat_map(|m| &m.data)
-            .step_by(feature_maps.iter().map(|m| m.data.len()).sum::<usize>() / target_size)
-            .copied()
+    pub fn strided_flatten(feature_maps: Vec<Matrix>, target_size: usize, batch_size: usize) -> Matrix {
+        let total_features = feature_maps.iter().map(|m| m.data.len()).sum::<usize>();
+
+        assert!(
+            total_features % batch_size == 0,
+            "Total feature count {} is not evenly divisible by batch size {}",
+            total_features,
+            batch_size
+        );
+
+        let features_per_batch = total_features / batch_size;
+        let stride = (features_per_batch / target_size).max(1);
+
+        // First, flatten into a single Vec<f64>
+        let flattened: Vec<f64> = feature_maps.iter().flat_map(|m| &m.data).copied().collect();
+
+        // Then process each batch separately
+        let strided_data: Vec<f64> = flattened
+            .chunks(features_per_batch) // Now we can chunk properly
+            .flat_map(|batch_chunk| batch_chunk.iter().step_by(stride).copied().take(target_size))
             .collect();
 
-        Matrix::new(1, target_size, flattened_data)
+        Matrix::new(batch_size, target_size, strided_data)
     }
 
     /// Convolution-Based Flattening: Placeholder for 1x1 convolution-based approach
-    fn convolution_flatten(feature_maps: Vec<Matrix>, target_size: usize) -> Matrix {
+    pub fn convolution_flatten(feature_maps: Vec<Matrix>, target_size: usize, batch_size: usize) -> Matrix {
         println!("Convolution-based flattening is not implemented yet.");
-        println!("{:?}", feature_maps.len());
+        println!("size of feature maps:{}, and batch_size:{}", feature_maps.len(), batch_size);
         Matrix::new(1, target_size, vec![0.0; target_size]) // Placeholder return
     }
 
@@ -269,12 +318,12 @@ impl Matrix {
     }
 
     pub fn get_filter(&self, from_row: usize, from_col:usize, filter_size: usize) -> Result<Matrix, String> {
-    if from_row + filter_size > self.rows {
-        return Err(format!(
-            "Your current filter {} does not work with the image! Choose a filter size that divides evenly into {}.", filter_size,
-            self.rows
-        ));
-    }
+        if self.rows % filter_size != 0 {
+            return Err(format!(
+                "Your current filter size {} does not work with the image! Choose a filter size that divides evenly into {}.", self.rows,
+                self.rows
+            ));
+        }
 
         Ok(self.get_patch(from_row, from_col, filter_size, filter_size))
     }
@@ -658,6 +707,15 @@ impl Matrix {
     pub fn slice(&self, start: usize, end: usize) -> Matrix {
         let end = end.min(self.rows);
         Matrix::new(end - start, self.cols, self.data[start * self.cols..end * self.cols].to_vec())
+    }
+
+    pub fn get_row(&self, row_index: usize) -> Matrix {
+        assert!(row_index < self.rows, "Row index out of bounds");
+
+        let start = row_index * self.cols;
+        let end = start + self.cols;
+
+        Matrix::new(1, self.cols, self.data[start..end].to_vec())
     }
 
     pub fn one_hot(index: usize, num_classes: usize) -> Matrix {
