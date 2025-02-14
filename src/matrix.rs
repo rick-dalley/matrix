@@ -68,9 +68,10 @@ pub struct Matrix {
     pub data: Vec<f64>, // Flat vector for matrix elements
 }
 
-//Implementation of a matrix specialized for a neural network
+// implemenation of a matrix specialized for a neural network, flattened to 1D for performance
 impl Matrix {
-    // Constructor for a new matrix
+
+    // construct a new matrix
     pub fn new(rows: usize, cols: usize, data: Vec<f64>) -> Self {
         assert_eq!(rows * cols, data.len(), "Data size mismatch");
         Self { rows, cols, data }
@@ -84,7 +85,7 @@ impl Matrix {
         })
     }
 
-    // Zero-initialized matrix
+    // zerp-initialized matrix
     pub fn zeros(rows: usize, cols: usize) -> Self {
         Self {
             rows,
@@ -93,11 +94,7 @@ impl Matrix {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
-    }
-
-    // Random-initialized matrix
+    // random-initialized matrix
     pub fn random(rows: usize, cols: usize) -> Self {
         use rand::thread_rng;
         use rand_distr::{Distribution, Normal};
@@ -110,6 +107,12 @@ impl Matrix {
 
         Self { rows, cols, data }
     }
+
+    // check for empty data field
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
 
     // fill with random normal values
     pub fn random_range(rows: usize, cols: usize, mean: f64, std_dev: f64) -> Self {
@@ -150,7 +153,7 @@ impl Matrix {
         Self::random_range(rows, cols, 0.0, std_dev)
     }
 
-    // Initialize_weights - neural network specific function for setting weights for the layers
+    // initialize_weights - neural network specific function for setting weights for the layers
     pub fn initialize_weights(&mut self, nodes_in_previous_layer: usize) {
         let std_dev = (nodes_in_previous_layer as f64).powf(-0.5); // Calculate standard deviation
         let normal = Normal::new(0.0, std_dev).unwrap(); // Normal distribution with mean 0 and std_dev
@@ -163,7 +166,7 @@ impl Matrix {
         }
     }
 
-    // Immutable access to matrix elements
+    // immutable access to matrix elements
     pub fn at(&self, row: usize, col: usize) -> &f64 {
         if row >= self.rows || col >= self.cols {
             panic!("Index out of bounds");
@@ -171,7 +174,7 @@ impl Matrix {
         &self.data[row * self.cols + col]
     }
 
-    // Return the index of the maximum value in the data
+    // teturn the index of the maximum value in the data
     pub fn argmax(&self) -> usize {
         // Assume it's a vector; precondition checked elsewhere
         self.data
@@ -182,6 +185,7 @@ impl Matrix {
             .unwrap_or_else(|| panic!("Matrix is empty, cannot compute argmax."))
     }
 
+    // utility function to flatten a Vec<Matrix> into a single Matrix
     pub fn flatten(matrices: Vec<Matrix>) -> Matrix {
         // Compute total number of features after flattening
         let total_features = matrices.iter().map(|m| m.data.len()).sum::<usize>();
@@ -197,6 +201,7 @@ impl Matrix {
 
     }
 
+    // flatten a slice of Vec<Matrix> into a single matrix
     pub fn flatten_batch(feature_maps: Vec<Matrix>, batch_size: usize) -> Matrix {
         let total_features = feature_maps.iter().map(|m| m.data.len()).sum::<usize>();
 
@@ -219,6 +224,7 @@ impl Matrix {
         Matrix::new(batch_size, new_cols, flattened_data)
     }
 
+    // use a specific strategy to flatten a Vec<Matrix> into a single matrix
     pub fn flatten_with_strategy(
         feature_maps: Vec<Matrix>, 
         strategy: FlatteningStrategy, 
@@ -232,7 +238,7 @@ impl Matrix {
         }
     }
 
-    /// Mean Pooling Flattening: Downsamples the feature maps by averaging adjacent values
+    /// Mean Pooling Flattening: downsamples the feature maps by averaging adjacent values
     pub fn mean_pooling_flatten(feature_maps: Vec<Matrix>, target_size: usize, batch_size: usize) -> Matrix {
         let total_features = feature_maps.iter().map(|m| m.data.len()).sum::<usize>();
 
@@ -268,7 +274,7 @@ impl Matrix {
         Matrix::new(batch_size, target_size, pooled_data)
     }
  
-    /// Strided Flattening: Selects every nth value to downsample
+    /// Strided Flattening: selects every nth value to downsample
     pub fn strided_flatten(feature_maps: Vec<Matrix>, target_size: usize, batch_size: usize) -> Matrix {
         let total_features = feature_maps.iter().map(|m| m.data.len()).sum::<usize>();
 
@@ -294,7 +300,7 @@ impl Matrix {
         Matrix::new(batch_size, target_size, strided_data)
     }
 
-    /// Convolution-Based Flattening: Placeholder for 1x1 convolution-based approach
+    /// Convolution-Based Flattening: placeholder - not implemented yet
     pub fn convolution_flatten(feature_maps: Vec<Matrix>, target_size: usize, batch_size: usize) -> Matrix {
         println!("Convolution-based flattening is not implemented yet.");
         println!("size of feature maps:{}, and batch_size:{}", feature_maps.len(), batch_size);
@@ -311,12 +317,15 @@ impl Matrix {
             .expect("Slice is empty")
     }
     
+    // sample return a number of rows and cols
     pub fn sample(&self, row: usize, n_elements:usize) -> Vec<f64> {
         let start = row * self.cols;
         let end = start + n_elements;
         self.data[start..end].to_vec()
     }
 
+    // get a matrix of the image (in this implementation) to be 
+    // used to slide around the image during convolution
     pub fn get_filter(&self, from_row: usize, from_col:usize, filter_size: usize) -> Result<Matrix, String> {
         if self.rows % filter_size != 0 {
             return Err(format!(
@@ -345,6 +354,7 @@ impl Matrix {
         Matrix::new(1, height * width, sub_data) // Reshape into 1D matrix
     }
 
+    // log softmax
     pub fn log_softmax(&self) -> Matrix {
         let mut log_softmax_data = Vec::new();
 
@@ -364,6 +374,7 @@ impl Matrix {
     }
 
 
+    // softmax
     pub fn softmax(&self) -> Matrix {
         let mut result_data = Vec::new();
         
@@ -397,11 +408,13 @@ impl Matrix {
         }
     }
 
+    // clamp to for mut self
     pub fn clamp_to_mut(&mut self, min: f64, max: f64) {
         self.data.iter_mut().for_each(|x| *x = x.max(min).min(max));
     }
 
 
+    // clampt to for immutable self
     pub fn clamp_to(&self, min: f64, max: f64) -> Matrix {
         let data = self
             .data
@@ -413,7 +426,7 @@ impl Matrix {
     }
 
 
-
+    // clip gradients
     pub fn clip_gradients_to(&mut self, threshold: f64) {
         let norm = (self.data.iter().map(|x| x * x).sum::<f64>()).sqrt();
         if norm > threshold {
@@ -422,7 +435,7 @@ impl Matrix {
         }
     }
 
-
+    // specific row softmax
     pub fn softmax_row(&self, input: &[f64]) -> Vec<f64> {
         
         let max_input = input.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
@@ -473,6 +486,7 @@ impl Matrix {
         Matrix::new(output_rows, output_cols, output_data)
     }
 
+    // max pooling
     pub fn max_pooling(&self, pool_size: usize, stride: usize) -> Matrix {
         let output_rows = (self.rows - pool_size) / stride + 1;
         let output_cols = (self.cols - pool_size) / stride + 1;
@@ -505,6 +519,7 @@ impl Matrix {
         Matrix::new(output_rows, output_cols, output_data)
     }
 
+    // average pooling
     pub fn avg_pooling(&self, pool_size: usize, stride: usize) -> Matrix {
         let output_rows = (self.rows - pool_size) / stride + 1;
         let output_cols = (self.cols - pool_size) / stride + 1;
@@ -536,7 +551,7 @@ impl Matrix {
         Matrix::new(output_rows, output_cols, output_data)
     }
 
-    // Mutable access to matrix elements
+    // mutable access to matrix elements
     pub fn at_mut(&mut self, row: usize, col: usize) -> &mut f64 {
         if row >= self.rows || col >= self.cols {
             panic!("Index out of bounds");
@@ -544,7 +559,7 @@ impl Matrix {
         &mut self.data[row * self.cols + col]
     }
 
-    // Transpose - flip rows and cols
+    // transpose - flip rows and cols
     pub fn transpose(&self) -> Self {
 
         let mut transposed = Matrix::zeros(self.cols, self.rows); // Swap rows and cols
@@ -560,8 +575,7 @@ impl Matrix {
     }
 
     // Copy a row or col from the matrix
-    // TODO: this is poorly named
-    pub fn extract(&self) -> Result<Vec<f64>, String> {
+    pub fn to_vec(&self) -> Result<Vec<f64>, String> {
         if self.rows == 1 {
             // Row vector: return all elements
             Ok(self.data.clone())
@@ -574,7 +588,7 @@ impl Matrix {
         }
     }
 
-    // Returns a slice for the row specified by row_index
+    // returns a slice for the row specified by row_index
     pub fn row_slice(&self, row_index: usize) -> Result<&[f64], String> {
         if row_index >= self.rows {
             return Err("Row index out of bounds.".to_string());
