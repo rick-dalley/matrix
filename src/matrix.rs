@@ -426,6 +426,12 @@ impl Matrix {
     }
 
 
+    pub fn clip_to(&mut self, threshold: f64){
+        self.data.iter_mut().for_each(|v| {
+                    *v = v.max(-threshold).min(threshold);
+                });
+    }
+
     // clip gradients
     pub fn clip_gradients_to(&mut self, threshold: f64) {
         let norm = (self.data.iter().map(|x| x * x).sum::<f64>()).sqrt();
@@ -1023,9 +1029,40 @@ impl Matrix {
         }
     }
 
+    pub fn hadamard(&self, other: &Matrix) -> Matrix {
+        assert_eq!(self.rows, other.rows, "Hadamard product requires matching row dimensions.");
+        assert_eq!(self.cols, other.cols, "Hadamard product requires matching column dimensions.");
+
+        let data = self.data
+            .iter()
+            .zip(other.data.iter())
+            .map(|(a, b)| a * b)
+            .collect();
+
+        Matrix {
+            rows: self.rows,
+            cols: self.cols,
+            data,
+        }
+    }
+
+    pub fn sqrt(&self) -> Matrix {
+        let data = self.data.iter().map(|x| x.sqrt()).collect();
+
+        Matrix {
+            rows: self.rows,
+            cols: self.cols,
+            data,
+        }
+    }
+
     pub fn variance(&self) -> f64 {
         let mean = self.mean();
         self.data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / self.data.len() as f64
+    }
+
+    pub fn norm(&self) -> f64 {
+        self.data.iter().map(|&x| x * x).sum::<f64>().sqrt()
     }
 
     pub fn std_dev(&self) -> f64 {
@@ -1149,6 +1186,46 @@ impl Matrix {
                 }
             }
         }
+    }
+
+    pub fn normalize_with(&mut self, epsilon: f64) {
+        let feature_means = self.mean_axis(0);
+        let feature_stds = self.standard_dev(0, Some(&feature_means));
+
+        for (_row, chunk) in self.data.chunks_mut(self.cols).enumerate() {
+            for (col, value) in chunk.iter_mut().enumerate() {
+                let mean = feature_means.data[col];
+                let std = feature_stds.data[col];
+
+                if std < epsilon {
+                    *value -= mean; // Centering only
+                } else {
+                    *value = (*value - mean) / std;
+                }
+            }
+        }
+    }
+
+    pub fn normalized_copy(&self, epsilon: f64) -> Matrix {
+        let feature_means = self.mean_axis(0);
+        let feature_stds = self.standard_dev(0, Some(&feature_means));
+
+        let mut new_data = self.data.clone(); // Clone data to create a copy
+
+        for (_row, chunk) in new_data.chunks_mut(self.cols).enumerate() {
+            for (col, value) in chunk.iter_mut().enumerate() {
+                let mean = feature_means.data[col];
+                let std = feature_stds.data[col];
+
+                if std < epsilon {
+                    *value -= mean; // Centering only
+                } else {
+                    *value = (*value - mean) / std;
+                }
+            }
+        }
+
+        Matrix::new(self.rows, self.cols, new_data)
     }
 
     pub fn abs(&self) -> Matrix {
@@ -1390,6 +1467,25 @@ impl Add<&Matrix> for Matrix {
     }
 }
 
+impl Add<f64> for &Matrix {
+    type Output = Matrix;
+
+    fn add(self, rhs: f64) -> Self::Output {
+        let result_array = self.to_ndarray() + rhs;
+        Matrix::from_ndarray(result_array)
+    }
+}
+
+// Implement `Add<f64>` for owned `Matrix`
+impl Add<f64> for Matrix {
+    type Output = Matrix;
+
+    fn add(self, rhs: f64) -> Matrix {
+        let result_array = self.to_ndarray() + rhs;
+        Matrix::from_ndarray(result_array)
+    }
+}
+
 // Implement append (AddAssign) for Matrix
 impl AddAssign for Matrix {
     fn add_assign(&mut self, rhs: Self) {
@@ -1477,7 +1573,7 @@ impl<'a> Sub<Matrix> for &'a Matrix {
         Matrix::from_ndarray(result_array)
     }
 }
-
+// Subtraction assignment for Matrix -= Matrix
 impl SubAssign for Matrix {
     fn sub_assign(&mut self, rhs: Self) {
         assert_eq!(self.rows, rhs.rows, "Row dimensions must match");
@@ -1486,11 +1582,25 @@ impl SubAssign for Matrix {
         let mut left_array = self.to_ndarray();
         let right_array = rhs.to_ndarray();
 
-        left_array -= &right_array; // In-place element-wise subtraction
-
+        left_array -= &right_array;
         *self = Matrix::from_ndarray(left_array);
     }
 }
+
+// Subtraction assignment for Matrix -= &Matrix
+impl SubAssign<&Matrix> for Matrix {
+    fn sub_assign(&mut self, rhs: &Matrix) {
+        assert_eq!(self.rows, rhs.rows, "Row dimensions must match");
+        assert_eq!(self.cols, rhs.cols, "Column dimensions must match");
+
+        let mut left_array = self.to_ndarray();
+        let right_array = rhs.to_ndarray();
+
+        left_array -= &right_array;
+        *self = Matrix::from_ndarray(left_array);
+    }
+}
+
 
 impl Div<f64> for Matrix {
     type Output = Matrix;
@@ -1502,13 +1612,11 @@ impl Div<f64> for Matrix {
     }
 }
 
-// Borrowed version (`&Matrix / f64`)
 impl Div<f64> for &Matrix {
     type Output = Matrix;
 
     fn div(self, scalar: f64) -> Matrix {
-        let array = self.to_ndarray();
-        let result_array = &array / scalar;
+        let result_array = self.to_ndarray() / scalar;
         Matrix::from_ndarray(result_array)
     }
 }
@@ -1520,10 +1628,33 @@ impl Div<&Matrix> for Matrix {
         assert_eq!(self.rows, rhs.rows, "Row dimensions must match");
         assert_eq!(self.cols, rhs.cols, "Column dimensions must match");
 
-        let left_array = self.to_ndarray();
-        let right_array = rhs.to_ndarray();
+        let result_array = self.to_ndarray() / rhs.to_ndarray(); // No need for extra referencing
+        Matrix::from_ndarray(result_array)
+    }
+}
 
-        let result_array = &left_array / &right_array; // Element-wise division
+
+impl Div<Matrix> for Matrix {
+    type Output = Matrix;
+
+    fn div(self, rhs: Matrix) -> Matrix {
+        assert_eq!(self.rows, rhs.rows, "Row dimensions must match");
+        assert_eq!(self.cols, rhs.cols, "Column dimensions must match");
+
+        let result_array = self.to_ndarray() / rhs.to_ndarray(); // No need for extra referencing
+        Matrix::from_ndarray(result_array)
+    }
+}
+
+// Implement Division for &Matrix / Matrix
+impl Div<Matrix> for &Matrix {
+    type Output = Matrix;
+
+    fn div(self, rhs: Matrix) -> Matrix {
+        assert_eq!(self.rows, rhs.rows, "Row dimensions must match");
+        assert_eq!(self.cols, rhs.cols, "Column dimensions must match");
+
+        let result_array = self.to_ndarray() / rhs.to_ndarray();
         Matrix::from_ndarray(result_array)
     }
 }
